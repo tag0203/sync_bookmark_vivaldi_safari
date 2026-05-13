@@ -1,0 +1,22 @@
+[project]
+name = "bsync"
+version = "0.1.0"
+description = "Bidirectional bookmark sync between Vivaldi and Safari on macOS"
+license = {file = "LICENSE"}
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "watchdog>=4.0",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
