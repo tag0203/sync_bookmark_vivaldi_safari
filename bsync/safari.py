@@ -119,7 +119,6 @@ class SafariReader:
     def flatten(self, tree: BookmarkTree) -> dict[str, Bookmark]:
         result: dict[str, Bookmark] = {}
         _flatten_folder(tree.bar, result)
-        _flatten_folder(tree.other, result)
         return result
 
 

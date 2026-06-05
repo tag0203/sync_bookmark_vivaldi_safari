@@ -70,6 +70,7 @@ class VivaldiReader:
                 date_added=_chrome_ts_to_datetime(node.get("date_added", "0")),
                 date_modified=_chrome_ts_to_datetime(node.get("date_modified", "0")),
                 folder_path=parent_path,
+                meta=node.get("meta_info", {}),
             )
         else:
             title = node.get("name", "")
@@ -88,9 +89,21 @@ class VivaldiReader:
 
     def flatten(self, tree: BookmarkTree) -> dict[str, Bookmark]:
         result: dict[str, Bookmark] = {}
-        _flatten_folder(tree.bar, result)
-        _flatten_folder(tree.other, result)
+        bar_folder = _find_bookmarkbar_folder(tree.bar) or tree.bar
+        _flatten_folder(bar_folder, result)
         return result
+
+
+def _find_bookmarkbar_folder(folder: BookmarkFolder) -> BookmarkFolder | None:
+    """meta_info に Bookmarkbar: true を持つフォルダを再帰的に探す。"""
+    if folder.meta.get("Bookmarkbar") == "true":
+        return folder
+    for child in folder.children:
+        if isinstance(child, BookmarkFolder):
+            found = _find_bookmarkbar_folder(child)
+            if found:
+                return found
+    return None
 
 
 def _flatten_folder(folder: BookmarkFolder, result: dict[str, Bookmark]) -> None:

@@ -27,6 +27,7 @@ class BookmarkFolder:
     date_added: datetime
     date_modified: datetime
     folder_path: list[str] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
