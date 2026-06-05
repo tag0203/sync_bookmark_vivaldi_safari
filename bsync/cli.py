@@ -54,6 +54,8 @@ def _run_sync(
     console: Console,
     vivaldi_path: Path | None = None,
     safari_path: Path | None = None,
+    vivaldi_folders: str | None = None,
+    safari_folders: str | None = None,
 ) -> MergeResult:
     from .vivaldi import DEFAULT_PATH as VIV_DEFAULT
     from .safari import DEFAULT_PATH as SAF_DEFAULT
@@ -86,9 +88,17 @@ def _run_sync(
     snapshot_mgr = SnapshotManager()
     base = snapshot_mgr.load()
 
+    # --- フォルダフィルタリング ---
+    from .filters import parse_folder_specs, filter_flat_vivaldi, filter_flat_safari, filter_snapshot
+    viv_prefixes = parse_folder_specs(vivaldi_folders or "")
+    saf_prefixes = parse_folder_specs(safari_folders or "")
+    viv_flat_m = filter_flat_vivaldi(viv_flat, viv_prefixes)
+    saf_flat_m = filter_flat_safari(saf_flat, saf_prefixes)
+    base_m = filter_snapshot(base, viv_prefixes, saf_prefixes)
+
     # --- マージ ---
     engine = MergeEngine(strategy=strategy)
-    result = engine.merge(base, viv_flat, saf_flat)
+    result = engine.merge(base_m, viv_flat_m, saf_flat_m)
 
     # --- 表示 ---
     _print_result(result, dry_run, console)
@@ -209,6 +219,20 @@ def _save_pending(result: MergeResult) -> None:
         json.dump(pending, f, ensure_ascii=False, indent=2)
 
 
+_vivaldi_folders_option = click.option(
+    "--vivaldi-folders",
+    default=None,
+    metavar="PATHS",
+    help="Vivaldi の同期対象フォルダをカンマ区切りで指定 (例: bookmark_bar/Tech,other)。未指定時は全フォルダ。",
+)
+_safari_folders_option = click.option(
+    "--safari-folders",
+    default=None,
+    metavar="PATHS",
+    help="Safari の同期対象フォルダをカンマ区切りで指定 (例: BookmarksBar/Tech,BookmarksMenu)。未指定時は全フォルダ。",
+)
+
+
 @click.group()
 @click.version_option(__version__, prog_name="bsync")
 def main() -> None:
@@ -224,10 +248,15 @@ def main() -> None:
     show_default=True,
     help="競合解決戦略",
 )
-def sync(dry_run: bool, strategy: str) -> None:
+@_vivaldi_folders_option
+@_safari_folders_option
+def sync(dry_run: bool, strategy: str, vivaldi_folders: str | None, safari_folders: str | None) -> None:
     """ブックマークを双方向同期する。"""
     _ensure_data_dir()
-    _run_sync(dry_run=dry_run, strategy=strategy, console=console)
+    _run_sync(
+        dry_run=dry_run, strategy=strategy, console=console,
+        vivaldi_folders=vivaldi_folders, safari_folders=safari_folders,
+    )
 
 
 @main.command()
@@ -239,11 +268,13 @@ def sync(dry_run: bool, strategy: str) -> None:
     show_default=True,
     help="競合解決戦略",
 )
-def watch(interval: int, strategy: str) -> None:
+@_vivaldi_folders_option
+@_safari_folders_option
+def watch(interval: int, strategy: str, vivaldi_folders: str | None, safari_folders: str | None) -> None:
     """ファイル変更を監視して自動同期する。"""
     _ensure_data_dir()
     from .watcher import BookmarkWatcher
-    BookmarkWatcher(interval=interval, strategy=strategy).start()
+    BookmarkWatcher(interval=interval, strategy=strategy, vivaldi_folders=vivaldi_folders, safari_folders=safari_folders).start()
 
 
 @main.command()

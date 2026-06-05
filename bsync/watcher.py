@@ -52,9 +52,17 @@ class _BookmarkEventHandler(FileSystemEventHandler):
 
 
 class BookmarkWatcher:
-    def __init__(self, interval: int = 5, strategy: str = "newer") -> None:
+    def __init__(
+        self,
+        interval: int = 5,
+        strategy: str = "newer",
+        vivaldi_folders: str | None = None,
+        safari_folders: str | None = None,
+    ) -> None:
         self.interval = interval
         self.strategy = strategy
+        self.vivaldi_folders = vivaldi_folders
+        self.safari_folders = safari_folders
         self._stop_event = threading.Event()
 
     def start(self) -> None:
@@ -66,7 +74,10 @@ class BookmarkWatcher:
             console.print("[yellow]変更を検出しました。同期を実行します…[/yellow]")
             try:
                 from .cli import _run_sync
-                _run_sync(dry_run=False, strategy=self.strategy, console=console)
+                _run_sync(
+                    dry_run=False, strategy=self.strategy, console=console,
+                    vivaldi_folders=self.vivaldi_folders, safari_folders=self.safari_folders,
+                )
             except Exception as e:
                 logger.error("同期中にエラーが発生しました: %s", e)
                 console.print(f"[red]エラー: {e}[/red]")
@@ -120,7 +131,10 @@ class BookmarkWatcher:
             console.print(f"[green]pending キューを書き込みます ({len(pending)} 件)[/green]")
             # pending の処理は cli._run_sync に委譲（フルサイクル再実行）
             from .cli import _run_sync
-            _run_sync(dry_run=False, strategy=self.strategy, console=console)
+            _run_sync(
+                dry_run=False, strategy=self.strategy, console=console,
+                vivaldi_folders=self.vivaldi_folders, safari_folders=self.safari_folders,
+            )
             PENDING_PATH.unlink(missing_ok=True)
         except Exception as e:
             logger.error("pending フラッシュ中にエラー: %s", e)
