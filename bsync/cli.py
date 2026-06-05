@@ -18,6 +18,9 @@ from .merge import (
     apply_additions_to_vivaldi_tree,
     apply_deletions_to_tree,
     apply_updates_to_tree,
+    collect_folder_paths,
+    _vivaldi_path_to_safari,
+    _safari_path_to_vivaldi,
 )
 from .models import MergeResult
 from .safari import SafariPermissionError, SafariReader, SafariWriter, is_safari_running
@@ -101,7 +104,9 @@ def _run_sync(
     result = engine.merge(base_m, viv_flat_m, saf_flat_m)
 
     # --- 表示 ---
-    _print_result(result, dry_run, console)
+    viv_folder_paths = collect_folder_paths(viv_tree)
+    saf_folder_paths = collect_folder_paths(saf_tree)
+    _print_result(result, dry_run, console, viv_folder_paths, saf_folder_paths)
 
     if dry_run:
         return result
@@ -160,7 +165,21 @@ def _run_sync(
     return result
 
 
-def _print_result(result: MergeResult, dry_run: bool, console: Console) -> None:
+def _folder_label(path: list[str]) -> str:
+    return "/".join(path) if path else "(ルート)"
+
+
+def _folder_exists_mark(path: tuple[str, ...], folder_paths: set[tuple[str, ...]]) -> str:
+    return "[green]✓[/green]" if path in folder_paths else "[yellow]✗ 新規作成[/yellow]"
+
+
+def _print_result(
+    result: MergeResult,
+    dry_run: bool,
+    console: Console,
+    viv_folder_paths: set[tuple[str, ...]] | None = None,
+    saf_folder_paths: set[tuple[str, ...]] | None = None,
+) -> None:
     prefix = "[dim]dry-run[/dim] " if dry_run else ""
 
     table = Table(title=f"{prefix}同期結果サマリー")
@@ -182,17 +201,30 @@ def _print_result(result: MergeResult, dry_run: bool, console: Console) -> None:
             )
 
     for bm in result.to_add_vivaldi:
-        console.print(f"  [green]+[/green] Vivaldi追加: {bm.title!r}  {bm.url}")
+        # bm.folder_path は Safari 形式 → Vivaldi 形式に変換して存在確認
+        viv_path = _safari_path_to_vivaldi(bm.folder_path)
+        exists = _folder_exists_mark(tuple(viv_path), viv_folder_paths or set())
+        folder = _folder_label(viv_path)
+        console.print(f"  [green]+[/green] Vivaldi追加: {bm.title!r}  {bm.url}  [[dim]{folder}[/dim]] {exists}")
+
     for bm in result.to_add_safari:
-        console.print(f"  [green]+[/green] Safari追加:  {bm.title!r}  {bm.url}")
+        # bm.folder_path は Vivaldi 形式 → Safari 形式に変換して存在確認
+        saf_path = _vivaldi_path_to_safari(bm.folder_path)
+        exists = _folder_exists_mark(tuple(saf_path), saf_folder_paths or set())
+        folder = _folder_label(saf_path)
+        console.print(f"  [green]+[/green] Safari追加:  {bm.title!r}  {bm.url}  [[dim]{folder}[/dim]] {exists}")
+
     for url in result.to_delete_vivaldi:
         console.print(f"  [red]-[/red] Vivaldi削除: {url}")
     for url in result.to_delete_safari:
         console.print(f"  [red]-[/red] Safari削除:  {url}")
+
     for bm in result.to_update_vivaldi:
-        console.print(f"  [blue]~[/blue] Vivaldi更新: {bm.title!r}  {bm.url}")
+        folder = _folder_label(bm.folder_path)
+        console.print(f"  [blue]~[/blue] Vivaldi更新: {bm.title!r}  {bm.url}  [[dim]{folder}[/dim]]")
     for bm in result.to_update_safari:
-        console.print(f"  [blue]~[/blue] Safari更新:  {bm.title!r}  {bm.url}")
+        folder = _folder_label(bm.folder_path)
+        console.print(f"  [blue]~[/blue] Safari更新:  {bm.title!r}  {bm.url}  [[dim]{folder}[/dim]]")
 
 
 def _save_pending(result: MergeResult) -> None:

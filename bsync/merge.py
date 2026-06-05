@@ -231,6 +231,33 @@ def _update_in_folder(folder: BookmarkFolder, url_to_bm: dict[str, Bookmark]) ->
             _update_in_folder(child, url_to_bm)
 
 
+def collect_folder_paths(tree: BookmarkTree) -> set[tuple[str, ...]]:
+    """ツリー内の全フォルダパスをタプルのセットとして返す。
+
+    Vivaldi は flatten() と同じ active bar 正規化を適用する。
+    Safari はそのまま ("BookmarksBar" / "BookmarksMenu")。
+    """
+    paths: set[tuple[str, ...]] = set()
+    if tree.source == "vivaldi":
+        from .vivaldi import _find_bookmarkbar_folder
+        bar_folder = _find_bookmarkbar_folder(tree.bar) or tree.bar
+        _collect_from_folder(bar_folder, ("bookmark_bar",), paths)
+        _collect_from_folder(tree.other, ("other",), paths)
+    else:
+        _collect_from_folder(tree.bar, (tree.bar.title,), paths)
+        _collect_from_folder(tree.other, (tree.other.title,), paths)
+    return paths
+
+
+def _collect_from_folder(
+    folder: BookmarkFolder, current_path: tuple[str, ...], paths: set[tuple[str, ...]]
+) -> None:
+    paths.add(current_path)
+    for child in folder.children:
+        if isinstance(child, BookmarkFolder):
+            _collect_from_folder(child, current_path + (child.title,), paths)
+
+
 def _vivaldi_path_to_safari(path: list[str]) -> list[str]:
     if not path:
         return ["BookmarksBar"]
