@@ -148,13 +148,19 @@ def apply_additions_to_vivaldi_tree(
     tree: BookmarkTree, bookmarks: list[Bookmark]
 ) -> None:
     """マージ結果の to_add_vivaldi を BookmarkTree に反映する。"""
-    from .vivaldi import find_or_create_folder
+    from .vivaldi import find_or_create_folder, _find_bookmarkbar_folder
+
+    bar_folder = _find_bookmarkbar_folder(tree.bar) or tree.bar
 
     for bm in bookmarks:
         # Safari のフォルダパスを Vivaldi パスに変換
         viv_path = _safari_path_to_vivaldi(bm.folder_path)
-        root = tree.bar if (not viv_path or viv_path[0] == "bookmark_bar") else tree.other
-        sub_path = viv_path[1:] if viv_path else []
+        if not viv_path or viv_path[0] == "bookmark_bar":
+            root = bar_folder
+            sub_path = viv_path[1:] if viv_path else []
+        else:
+            root = tree.other
+            sub_path = viv_path[1:]
         target_folder = find_or_create_folder(root, sub_path) if sub_path else root
         new_bm = Bookmark(
             title=bm.title,

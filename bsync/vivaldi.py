@@ -91,6 +91,13 @@ class VivaldiReader:
         result: dict[str, Bookmark] = {}
         bar_folder = _find_bookmarkbar_folder(tree.bar) or tree.bar
         _flatten_folder(bar_folder, result)
+        # bar_folder がサブフォルダの場合、そのパスプレフィックスを除去して
+        # bookmark_bar ルート直下から始まるパスに正規化する
+        if bar_folder is not tree.bar:
+            prefix = bar_folder.folder_path + [bar_folder.title]
+            for bm in result.values():
+                if bm.folder_path[:len(prefix)] == prefix:
+                    bm.folder_path = ["bookmark_bar"] + bm.folder_path[len(prefix):]
         return result
 
 
