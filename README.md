@@ -12,7 +12,7 @@ Safari は iCloud 経由で iOS Safari と自動同期されるため、iPhone/i
 - **3ウェイマージ**: 前回同期スナップショットを使った差分検出で「追加/削除/変更/競合」を正確に判定
 - **競合解決**: タイムスタンプ優先（デフォルト）/ Vivaldi 優先 / Safari 優先 を選択可能
 - **watch モード**: FSEvents でファイル変更を監視して自動同期
-- **Vivaldi 起動中対応**: 書き込みキュー（`~/.bsync/pending.json`）を使い、Vivaldi 終了後に適用
+- **Vivaldi 起動中対応**: 書き込みキュー（`~/.bsync/pending.json`）を使い、Vivaldi 終了後に `sync` または `watch` で再開
 - **バックアップ/復元**: 同期前に自動バックアップ、手動での復元も可能
 - **LaunchAgent 登録**: ログイン時に自動起動する macOS LaunchAgent を設定
 
@@ -84,6 +84,8 @@ python -m bsync watch
 python -m bsync watch --interval 10   # デバウンス秒数を変更（デフォルト: 5秒）
 ```
 
+Vivaldi 向けの変更が保留された場合、`watch` は Vivaldi の終了時に同期を再開します。Vivaldi が終了済みなら `watch` の起動時にも再開します。手動で再開する場合は Vivaldi を完全終了し、元と同じオプションで `sync --dry-run` を確認してから `sync` を実行します。
+
 ### バックアップ
 
 ```bash
@@ -129,6 +131,7 @@ python -m bsync install-agent
 ~/.bsync/
 ├── last_sync.json      # 前回同期状態のスナップショット
 ├── pending.json        # Vivaldi 起動中に書き込めなかった変更のキュー
+├── sync.lock           # sync と watch の同時書き込みを防ぐロック
 ├── bsync.log           # 競合・エラーのログ
 └── backups/
     ├── vivaldi_YYYYMMDD_HHMMSS.json

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import signal
 import threading
@@ -11,12 +10,11 @@ from typing import Callable
 from watchdog.events import FileModifiedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from .pending import PENDING_PATH
 from .vivaldi import DEFAULT_PATH as VIVALDI_PATH, is_vivaldi_running
 from .safari import DEFAULT_PATH as SAFARI_PATH
 
 logger = logging.getLogger("bsync")
-
-PENDING_PATH = Path("~/.bsync/pending.json").expanduser()
 
 
 class DebounceTimer:
@@ -102,7 +100,8 @@ class BookmarkWatcher:
         signal.signal(signal.SIGINT, _shutdown)
         signal.signal(signal.SIGTERM, _shutdown)
 
-        vivaldi_was_running = is_vivaldi_running()
+        # 起動時にも、Vivaldi が終了済みなら既存のキューを処理する。
+        vivaldi_was_running = True
 
         try:
             while not self._stop_event.is_set():
@@ -123,19 +122,15 @@ class BookmarkWatcher:
         if not PENDING_PATH.exists():
             return
         try:
-            with open(PENDING_PATH, encoding="utf-8") as f:
-                pending = json.load(f)
-            if not pending:
-                PENDING_PATH.unlink(missing_ok=True)
-                return
-            console.print(f"[green]pending キューを書き込みます ({len(pending)} 件)[/green]")
-            # pending の処理は cli._run_sync に委譲（フルサイクル再実行）
             from .cli import _run_sync
+
+            console.print("[green]pending キューの同期を再開します[/green]")
             _run_sync(
                 dry_run=False, strategy=self.strategy, console=console,
                 vivaldi_folders=self.vivaldi_folders, safari_folders=self.safari_folders,
             )
-            PENDING_PATH.unlink(missing_ok=True)
+        except SystemExit as e:
+            logger.error("pending の同期が中断しました (終了コード: %s)", e.code)
         except Exception as e:
             logger.error("pending フラッシュ中にエラー: %s", e)
             console.print(f"[red]pending フラッシュエラー: {e}[/red]")

@@ -12,6 +12,7 @@ from .models import (
     SyncRecord,
     EPOCH_UTC,
 )
+from .pending import PendingChange
 
 # Vivaldi ルートフォルダ名 → Safari ルートフォルダ名 のマッピング
 _VIV_TO_SAF_ROOT = {"bookmark_bar": "BookmarksBar", "other": "BookmarksMenu"}
@@ -29,18 +30,33 @@ class MergeEngine:
         base: dict[str, SyncRecord],
         vivaldi: dict[str, Bookmark],
         safari: dict[str, Bookmark],
+        *,
+        pending: dict[str, PendingChange] | None = None,
     ) -> MergeResult:
         result = MergeResult()
+        pending = pending or {}
         all_urls = set(base) | set(vivaldi) | set(safari)
 
         for url in all_urls:
             in_base = url in base
             in_viv = url in vivaldi
             in_saf = url in safari
+            queued = pending.get(url)
+
+            if queued is not None and queued.operation == "update" and in_viv and in_saf:
+                entry = queued.bookmark or {}
+                previous_title = entry.get("previous_vivaldi_title", vivaldi[url].title)
+                if vivaldi[url].title == previous_title:
+                    if vivaldi[url].title != safari[url].title:
+                        result.to_update_vivaldi.append(safari[url])
+                    continue
 
             if not in_base and in_viv and not in_saf:
-                # Vivaldi のみに存在 → Safari へ追加
-                result.to_add_safari.append(vivaldi[url])
+                if queued is not None and queued.operation == "delete":
+                    # 旧スナップショットでは未反映の削除が記録されていないことがある。
+                    result.to_delete_vivaldi.append(url)
+                else:
+                    result.to_add_safari.append(vivaldi[url])
 
             elif not in_base and not in_viv and in_saf:
                 # Safari のみに存在 → Vivaldi へ追加
@@ -55,8 +71,11 @@ class MergeEngine:
                 result.to_delete_vivaldi.append(url)
 
             elif in_base and not in_viv and in_saf:
-                # Vivaldi で削除 → Safari からも削除
-                result.to_delete_safari.append(url)
+                if queued is not None and queued.operation in ("add", "delete"):
+                    # 未反映の追加、または削除後に Safari で復元された URL。
+                    result.to_add_vivaldi.append(safari[url])
+                else:
+                    result.to_delete_safari.append(url)
 
             elif in_base and in_viv and in_saf:
                 # 全てに存在 → 変更を比較

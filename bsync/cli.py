@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import logging
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -23,13 +25,13 @@ from .merge import (
     _safari_path_to_vivaldi,
 )
 from .models import MergeResult
+from .pending import PENDING_PATH, load_pending, pending_from_result, save_pending
 from .safari import SafariPermissionError, SafariReader, SafariWriter, is_safari_running
 from .snapshot import SnapshotManager
 from .vivaldi import VivaldiReader, VivaldiWriter, is_vivaldi_running
 
 BSYNC_DIR = Path("~/.bsync").expanduser()
 BACKUP_DIR = BSYNC_DIR / "backups"
-PENDING_PATH = BSYNC_DIR / "pending.json"
 LOG_PATH = BSYNC_DIR / "bsync.log"
 
 console = Console()
@@ -60,6 +62,23 @@ def _run_sync(
     vivaldi_folders: str | None = None,
     safari_folders: str | None = None,
 ) -> MergeResult:
+    BSYNC_DIR.mkdir(parents=True, exist_ok=True)
+    with (BSYNC_DIR / "sync.lock").open("a") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        return _sync_bookmarks(
+            dry_run, strategy, console, vivaldi_path, safari_path, vivaldi_folders, safari_folders
+        )
+
+
+def _sync_bookmarks(
+    dry_run: bool,
+    strategy: str,
+    console: Console,
+    vivaldi_path: Path | None,
+    safari_path: Path | None,
+    vivaldi_folders: str | None,
+    safari_folders: str | None,
+) -> MergeResult:
     from .vivaldi import DEFAULT_PATH as VIV_DEFAULT
     from .safari import DEFAULT_PATH as SAF_DEFAULT
 
@@ -87,7 +106,11 @@ def _run_sync(
     viv_flat = viv_reader.flatten(viv_tree)
     saf_flat = saf_reader.flatten(saf_tree)
 
-    # --- スナップショット読み込み ---
+    # --- 同期状態の読み込み ---
+    try:
+        pending = load_pending(PENDING_PATH)
+    except (OSError, ValueError) as e:
+        raise click.ClickException(f"pending.json を読み込めません: {e}") from e
     snapshot_mgr = SnapshotManager()
     base = snapshot_mgr.load()
 
@@ -99,9 +122,16 @@ def _run_sync(
     saf_flat_m = filter_flat_safari(saf_flat, saf_prefixes)
     base_m = filter_snapshot(base, viv_prefixes, saf_prefixes)
 
+    outside_scope = (viv_flat.keys() - viv_flat_m.keys()) | (saf_flat.keys() - saf_flat_m.keys())
+    next_pending = {url: pending[url] for url in pending.keys() & outside_scope}
+    if next_pending:
+        viv_flat_m = {url: bm for url, bm in viv_flat_m.items() if url not in next_pending}
+        saf_flat_m = {url: bm for url, bm in saf_flat_m.items() if url not in next_pending}
+        base_m = {url: record for url, record in base_m.items() if url not in next_pending}
+
     # --- マージ ---
     engine = MergeEngine(strategy=strategy)
-    result = engine.merge(base_m, viv_flat_m, saf_flat_m)
+    result = engine.merge(base_m, viv_flat_m, saf_flat_m, pending=pending)
 
     # --- 表示 ---
     viv_folder_paths = collect_folder_paths(viv_tree)
@@ -128,30 +158,39 @@ def _run_sync(
             saf_writer.write(saf_tree, saf_original)
             console.print("[green]Safari ブックマークを更新しました。[/green]")
         except PermissionError as e:
-            console.print(f"[red]Safari 書き込みエラー: {e}[/red]")
+            raise click.ClickException(f"Safari 書き込みエラー: {e}") from e
 
     # --- Vivaldi へ書き込み ---
+    viv_flat_new = viv_flat
     if result.to_add_vivaldi or result.to_delete_vivaldi or result.to_update_vivaldi:
-        apply_additions_to_vivaldi_tree(viv_tree, result.to_add_vivaldi)
-        apply_deletions_to_tree(viv_tree, result.to_delete_vivaldi)
-        apply_updates_to_tree(viv_tree, result.to_update_vivaldi)
-
+        vivaldi_changes = pending_from_result(result, viv_flat_m)
         if viv_running:
             console.print("[yellow]Vivaldi が起動中のため、変更を pending.json にキューします。[/yellow]")
-            _save_pending(result)
+            next_pending.update(vivaldi_changes)
         else:
+            apply_additions_to_vivaldi_tree(viv_tree, result.to_add_vivaldi)
+            apply_deletions_to_tree(viv_tree, result.to_delete_vivaldi)
+            apply_updates_to_tree(viv_tree, result.to_update_vivaldi)
             viv_writer = VivaldiWriter(viv_path, backup_dir=BACKUP_DIR)
             try:
                 viv_writer.write(viv_tree, viv_original)
-                console.print("[green]Vivaldi ブックマークを更新しました。[/green]")
             except Exception as e:
-                console.print(f"[red]Vivaldi 書き込みエラー: {e}[/red]")
+                console.print(f"[red]Vivaldi 書き込みエラー（変更は pending に保持）: {e}[/red]")
+                next_pending.update(vivaldi_changes)
+            else:
+                viv_flat_new = viv_reader.flatten(viv_tree)
+                console.print("[green]Vivaldi ブックマークを更新しました。[/green]")
 
     # --- スナップショット保存 ---
-    # 書き込み後の最新状態で再 flatten
-    viv_flat_new = viv_reader.flatten(viv_tree)
+    if next_pending:
+        save_pending(PENDING_PATH, next_pending)
     saf_flat_new = saf_reader.flatten(saf_tree)
-    snapshot_mgr.save(viv_flat_new, saf_flat_new, result)
+    snapshot_mgr.save(
+        viv_flat_new, saf_flat_new, result,
+        deferred={url: base.get(url) for url in next_pending},
+    )
+    if not next_pending:
+        save_pending(PENDING_PATH, next_pending)
 
     # --- 競合ログ ---
     if result.conflicts:
@@ -225,30 +264,6 @@ def _print_result(
     for bm in result.to_update_safari:
         folder = _folder_label(bm.folder_path)
         console.print(f"  [blue]~[/blue] Safari更新:  {bm.title!r}  {bm.url}  [[dim]{folder}[/dim]]")
-
-
-def _save_pending(result: MergeResult) -> None:
-    import json
-    pending = {
-        "to_add_vivaldi": [
-            {"title": bm.title, "url": bm.url, "guid": bm.guid,
-             "date_added": bm.date_added.isoformat(),
-             "date_modified": bm.date_modified.isoformat(),
-             "folder_path": bm.folder_path}
-            for bm in result.to_add_vivaldi
-        ],
-        "to_delete_vivaldi": result.to_delete_vivaldi,
-        "to_update_vivaldi": [
-            {"title": bm.title, "url": bm.url, "guid": bm.guid,
-             "date_added": bm.date_added.isoformat(),
-             "date_modified": bm.date_modified.isoformat(),
-             "folder_path": bm.folder_path}
-            for bm in result.to_update_vivaldi
-        ],
-    }
-    BSYNC_DIR.mkdir(parents=True, exist_ok=True)
-    with open(PENDING_PATH, "w", encoding="utf-8") as f:
-        json.dump(pending, f, ensure_ascii=False, indent=2)
 
 
 _vivaldi_folders_option = click.option(
@@ -342,15 +357,13 @@ def status() -> None:
 
     # pending
     if PENDING_PATH.exists():
-        import json
         try:
-            with open(PENDING_PATH, encoding="utf-8") as f:
-                pending = json.load(f)
-            n_add = len(pending.get("to_add_vivaldi", []))
-            n_del = len(pending.get("to_delete_vivaldi", []))
-            n_upd = len(pending.get("to_update_vivaldi", []))
-            table.add_row("Pending (Vivaldi未書込)", f"追加:{n_add} 削除:{n_del} 更新:{n_upd}")
-        except Exception:
+            counts = Counter(change.operation for change in load_pending(PENDING_PATH).values())
+            table.add_row(
+                "Pending (Vivaldi未書込)",
+                f"追加:{counts['add']} 削除:{counts['delete']} 更新:{counts['update']}",
+            )
+        except (OSError, ValueError):
             table.add_row("Pending", "[yellow]読み込みエラー[/yellow]")
     else:
         table.add_row("Pending", "[dim]なし[/dim]")

@@ -171,7 +171,7 @@ class VivaldiWriter:
                 children.append(self._folder_to_dict(child, counter))
             else:
                 children.append(self._bookmark_to_dict(child, counter))
-        return {
+        node = {
             "type": "folder",
             "id": node_id,
             "guid": folder.guid,
@@ -181,6 +181,9 @@ class VivaldiWriter:
             "date_modified": _datetime_to_chrome_ts(folder.date_modified),
             "children": children,
         }
+        if folder.meta:
+            node["meta_info"] = folder.meta
+        return node
 
     def _bookmark_to_dict(self, bm: Bookmark, counter: list[int]) -> dict:
         node_id = str(counter[0])

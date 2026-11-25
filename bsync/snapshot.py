@@ -36,11 +36,18 @@ class SnapshotManager:
         vivaldi_flat: dict[str, Bookmark],
         safari_flat: dict[str, Bookmark],
         merge_result: MergeResult,
+        *,
+        deferred: dict[str, SyncRecord | None] | None = None,
     ) -> None:
+        deferred = deferred or {}
         all_urls = set(vivaldi_flat) | set(safari_flat)
-        bookmarks: dict[str, dict] = {}
+        bookmarks = {
+            url: _record_to_dict(record)
+            for url, record in deferred.items()
+            if record is not None
+        }
 
-        for url in all_urls:
+        for url in all_urls - deferred.keys():
             viv_bm = vivaldi_flat.get(url)
             saf_bm = safari_flat.get(url)
             record = self._build_record(url, viv_bm, saf_bm)
@@ -51,7 +58,7 @@ class SnapshotManager:
             "synced_at": datetime.now(tz=timezone.utc).timestamp(),
             "bookmarks": bookmarks,
         }
-        self._atomic_write(snapshot)
+        write_json_atomic(self.path, snapshot)
 
     def _build_record(
         self,
@@ -87,21 +94,22 @@ class SnapshotManager:
             )
         return result
 
-    def _atomic_write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
+
+def write_json_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self.path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _record_to_dict(rec: SyncRecord) -> dict:

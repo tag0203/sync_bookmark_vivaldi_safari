@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
@@ -103,6 +104,25 @@ class TestVivaldiReader:
             result = json.load(f)
         # sync_metadata は保持される
         assert "sync_metadata" in result
+
+    def test_write_preserves_selected_bookmark_bar_and_folder_metadata(self, tmp_path):
+        data = deepcopy(VIVALDI_NESTED_DATA)
+        root = data["roots"]["bookmark_bar"]
+        folder_metadata = {"Bookmarkbar": "true", "Description": "Selected folder"}
+        root["children"][0]["meta_info"] = folder_metadata
+        root["children"].append(deepcopy(VIVALDI_SIMPLE_DATA["roots"]["bookmark_bar"]["children"][0]))
+        path = tmp_path / "Bookmarks"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        reader = VivaldiReader(path)
+        tree, original = reader.read()
+
+        VivaldiWriter(path).write(tree, original)
+
+        reloaded, result = reader.read()
+        assert result["roots"]["bookmark_bar"]["children"][0]["meta_info"] == folder_metadata
+        assert {url: bookmark.folder_path for url, bookmark in reader.flatten(reloaded).items()} == {
+            "https://github.com": ["bookmark_bar", "Dev"],
+        }
 
     def test_new_bookmark_gets_id(self, tmp_path):
         dst = tmp_path / "Bookmarks"
